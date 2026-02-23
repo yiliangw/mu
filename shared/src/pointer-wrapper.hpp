@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <functional>
 #include <memory>
+#include <stdexcept>
 
 namespace dory {
 template <class T>

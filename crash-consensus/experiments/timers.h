@@ -57,7 +57,7 @@ typedef struct {
         ((((UINT64_T)t2.h) << 32) | t2.l) - ((((UINT64_T)t1.h) << 32) | t1.l);
 
 /* global timer frequency in Hz */
-unsigned long long g_timerfreq;
+static unsigned long long g_timerfreq;
 
 #define HRT_INIT                                                   \
     do {                                                                \

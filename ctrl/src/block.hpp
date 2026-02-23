@@ -59,6 +59,9 @@ class ControlBlock {
 
   int port() const;
   int lid() const;
+  bool isRoCE() const;
+  union ibv_gid gid() const;
+  int gidIndex() const;
 
   static bool pollCqIsOK(deleted_unique_ptr<struct ibv_cq> &cq,
                          std::vector<struct ibv_wc> &entries);

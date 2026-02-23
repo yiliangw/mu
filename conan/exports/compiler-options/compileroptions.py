@@ -44,6 +44,8 @@ options = {
             "C": [
                 # Warn about suspicious uses of logical operators in expressions
                 "-Wlogical-op",
+                # GCC 15 compat: suppress new warnings
+                "-Wno-template-body",
             ],
             "CXX": [
                 # Warn about suspicious uses of logical operators in expressions
@@ -54,7 +56,9 @@ options = {
                 # to a function that does not have a non-throwing exception
                 # specification (i.e. throw() or noexcept) but is known by the compiler
                 # to never throw an exception.
-                "-Wnoexcept",
+                # GCC 15 compat: suppress new warnings
+                "-Wno-template-body",
+                "-Wno-noexcept",
             ],
 
             "LINKER":

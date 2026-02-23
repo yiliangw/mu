@@ -1,5 +1,49 @@
 # Microsecond Consensus for Microsecond Applications - Source Code
 
+## [Syntony]
+
+Adapted for nsl node 1,2,3 (GCC 15, RoCE). See [`SETUP_GUIDE.md`](SETUP_GUIDE.md) for details and mofications.
+
+**Network topology (100Gbps RoCE, Mellanox ConnectX-5):**
+| Node | RDMA Device | Interface | IP |
+|------|------------|-----------|-----|
+| node1 | `rocep59s0f0` | `ens1f0np0` | 10.0.0.1 |
+| node2 | `rocep59s0f0` | `ens1f0np0` | 10.0.0.2 |
+| node3 | `mlx5_0` | `enp59s0f0np0` | 10.0.0.3 |
+
+**Prerequisites:**
+- Memcached running on node1 port 9999
+- RDMA (RoCE) devices active on node1, node2, node3
+- Build the codebase following `SETUP_GUIDE.md` Section 5
+
+**Run the 3-node consensus throughput test:**
+```bash
+./run_test.sh
+```
+The script automatically starts/stops memcached on port 9999 if not already running.
+
+This launches a leader on node1 and followers on node2/node3, replicating 64 bytes commands. Expected output:
+```
+Replicated 12582912 commands of size 64 bytes in ~5000000000 ns
+```
+
+**Run manually (e.g., latency test):**
+```bash
+# Terminal 1 — flush registry
+echo "flush_all" | nc -q 1 localhost 9999
+
+# Terminal 2 (node3)
+ssh node3 "cd mu/crash-consensus/demo/without_conan/build/src && DORY_REGISTRY_IP=10.0.0.1:9999 ./main-st-lat 3 64 1"
+
+# Terminal 3 (node2)
+ssh node2 "cd mu/crash-consensus/demo/without_conan/build/src && DORY_REGISTRY_IP=10.0.0.1:9999 ./main-st-lat 2 64 1"
+
+# Terminal 4 (node1 — start last)
+DORY_REGISTRY_IP=10.0.0.1:9999 ./crash-consensus/demo/without_conan/build/src/main-st-lat 1 64 1
+```
+
+---
+
 This repository provides the source code developed for the paper [...], as well as instruction on how to build and deploy the various experiments.
 
 ## Description of a running deployment.

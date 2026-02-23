@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstddef>
+#include <sys/types.h>
+
 namespace dory {
 struct LogConfig {
   static constexpr int Alignment = 64;

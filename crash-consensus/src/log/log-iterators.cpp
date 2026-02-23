@@ -1,3 +1,6 @@
+#include <cstdint>
+#include <stdexcept>
+
 #include "log-iterators.hpp"
 #include "log-config.hpp"
 

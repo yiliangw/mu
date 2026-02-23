@@ -1,3 +1,5 @@
+#include <cstdint>
+#include <stdexcept>
 #include <dory/shared/branching.hpp>
 #include <vector>
 

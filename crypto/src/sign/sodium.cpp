@@ -51,7 +51,7 @@ pub_key get_public_key(std::string mem_key) {
   ret.copy(reinterpret_cast<char*>(rpk), crypto_sign_PUBLICKEYBYTES, 0);
 
   return deleted_unique_ptr<unsigned char>(
-      rpk, [](unsigned char* data) { free(data); });
+      rpk, [](unsigned char* data) noexcept { free(data); });
 }
 
 std::map<int, pub_key> get_public_keys(std::string prefix,

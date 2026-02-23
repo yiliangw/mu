@@ -219,6 +219,12 @@ int ControlBlock::port() const { return resolved_port.portID(); }
 
 int ControlBlock::lid() const { return resolved_port.portLID(); }
 
+bool ControlBlock::isRoCE() const { return resolved_port.portIsRoCE(); }
+
+union ibv_gid ControlBlock::gid() const { return resolved_port.portGID(); }
+
+int ControlBlock::gidIndex() const { return resolved_port.portGIDIndex(); }
+
 bool ControlBlock::pollCqIsOK(deleted_unique_ptr<struct ibv_cq> &cq,
                               std::vector<struct ibv_wc> &entries) {
   auto num =

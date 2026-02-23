@@ -81,13 +81,21 @@ void RdmaConsensus::run() {
   std::vector<int> ids(remote_ids);
   ids.push_back(my_id);
 
-  // Get the last device
   {
     // TODO: The copy constructor is invoked here if we use auto and then
     // iterate on the dev_lst
     // auto dev_lst = d.list();
+    bool found = false;
     for (auto& dev : d.list()) {
       od = std::move(dev);
+      rp = std::make_unique<ResolvedPort>(od);
+      if (rp->bindTo(0)) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      throw std::runtime_error("No RDMA device with an active port found");
     }
   }
 
@@ -96,10 +104,11 @@ void RdmaConsensus::run() {
               od.name(), od.dev_name(), OpenDevice::type_str(od.node_type()),
               OpenDevice::type_str(od.transport_type()));
 
-  rp = std::make_unique<ResolvedPort>(od);
-  auto binded = rp->bindTo(0);
-  LOGGER_INFO(logger, "Binding to the first port of the device... {}",
-              binded ? "OK" : "FAILED");
+  // rp = std::make_unique<ResolvedPort>(od);
+  // auto binded = rp->bindTo(0);
+  // LOGGER_INFO(logger, "Binding to the first port of the device... {}",
+  //             binded ? "OK" : "FAILED");
+  LOGGER_INFO(logger, "Binding to the first port of the device... OK");
   LOGGER_INFO(logger, "Binded on (port_id, port_lid) = ({:d}, {:d})",
               rp->portID(), rp->portLID());
 
@@ -457,7 +466,7 @@ int RdmaConsensus::propose(uint8_t* buf, size_t buf_len) {
 
         std::transform(to_remote_memory.begin(), to_remote_memory.end(),
                        dest.begin(),
-                       bind2nd(std::plus<uintptr_t>(), local_fuo));
+                       [local_fuo](uintptr_t x) { return x + local_fuo; });
         auto err = majW->write(local_fuo_entry, size, dest, leader);
 
         if (!err->ok()) {
@@ -504,7 +513,7 @@ int RdmaConsensus::propose(uint8_t* buf, size_t buf_len) {
 
           auto [address, offset, size] = slot.location();
           std::transform(to_remote_memory.begin(), to_remote_memory.end(),
-                         dest.begin(), bind2nd(std::plus<uintptr_t>(), offset));
+                         dest.begin(), [offset](uintptr_t x) { return x + offset; });
           auto err = majW->write(address, size, dest, leader);
 
           if (!err->ok()) {
@@ -544,7 +553,7 @@ int RdmaConsensus::propose(uint8_t* buf, size_t buf_len) {
         auto [address, offset, size] = slot.location();
 
         std::transform(to_remote_memory.begin(), to_remote_memory.end(),
-                       dest.begin(), bind2nd(std::plus<uintptr_t>(), offset));
+                       dest.begin(), [offset](uintptr_t x) { return x + offset; });
         auto err = majW->write(address, size, dest, leader);
 
         if (!err->ok()) {

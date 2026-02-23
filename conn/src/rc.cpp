@@ -161,16 +161,25 @@ void ReliableConnection::reinit() { init(init_rights); }
 void ReliableConnection::connect(RemoteConnection &rc) {
   memset(&conn_attr, 0, sizeof(struct ibv_qp_attr));
   conn_attr.qp_state = IBV_QPS_RTR;
-  conn_attr.path_mtu = IBV_MTU_4096;
   conn_attr.rq_psn = DefaultPSN;
 
-  conn_attr.ah_attr.is_global = 0;
   conn_attr.ah_attr.sl = 0;  // TODO: Igor has it to 1
   conn_attr.ah_attr.src_path_bits = 0;
   conn_attr.ah_attr.port_num = static_cast<uint8_t>(cb.port());
 
   conn_attr.dest_qp_num = rc.rci.qpn;
   conn_attr.ah_attr.dlid = rc.rci.lid;
+
+  if (cb.isRoCE() || rc.is_roce) {
+    conn_attr.path_mtu = IBV_MTU_1024;
+    conn_attr.ah_attr.is_global = 1;
+    conn_attr.ah_attr.grh.dgid = rc.gid;
+    conn_attr.ah_attr.grh.sgid_index = static_cast<uint8_t>(cb.gidIndex());
+    conn_attr.ah_attr.grh.hop_limit = 255;
+  } else {
+    conn_attr.path_mtu = IBV_MTU_4096;
+    conn_attr.ah_attr.is_global = 0;
+  }
 
   conn_attr.max_dest_rd_atomic = 16;
   conn_attr.min_rnr_timer = 12;
@@ -382,7 +391,7 @@ bool ReliableConnection::pollCqIsOK(CQ cq,
 
 RemoteConnection ReliableConnection::remoteInfo() const {
   RemoteConnection rc(static_cast<uint16_t>(cb.lid()), uniq_qp->qp_num, mr.addr,
-                      mr.size, mr.rkey);
+                      mr.size, mr.rkey, cb.gid(), cb.isRoCE());
   return rc;
 }
 

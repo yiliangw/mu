@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 #include <utility>

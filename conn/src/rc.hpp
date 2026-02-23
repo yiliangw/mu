@@ -35,6 +35,17 @@ struct RemoteConnection {
     rci.rkey = rkey;
   }
 
+  RemoteConnection(uint16_t lid, uint32_t qpn, uintptr_t buf_addr,
+                   uint64_t buf_size, uint32_t rkey,
+                   union ibv_gid gid_, bool is_roce_)
+      : gid{gid_}, is_roce{is_roce_} {
+    rci.lid = lid;
+    rci.qpn = qpn;
+    rci.buf_addr = buf_addr;
+    rci.buf_size = buf_size;
+    rci.rkey = rkey;
+  }
+
   RemoteConnection(RemoteConnectionInfo rci) : rci{rci} {}
 
   std::string serialize() const {
@@ -42,6 +53,13 @@ struct RemoteConnection {
 
     os << std::hex << rci.lid << ":" << rci.qpn << ":" << rci.buf_addr << ":"
        << rci.buf_size << ":" << rci.rkey;
+
+    // Append GID and RoCE flag
+    os << ":" << (is_roce ? 1 : 0);
+    for (int i = 0; i < 16; i++) {
+      os << ":" << static_cast<unsigned>(gid.raw[i]);
+    }
+
     return os.str();
   }
 
@@ -73,11 +91,26 @@ struct RemoteConnection {
     rci.buf_size = buf_size;
     rci.rkey = rkey;
 
-    return RemoteConnection(rci);
+    RemoteConnection rc(rci);
+
+    // Try to parse GID and RoCE flag (backward compatible)
+    unsigned roce_flag = 0;
+    if (ss >> std::hex >> roce_flag) {
+      rc.is_roce = (roce_flag != 0);
+      for (int i = 0; i < 16; i++) {
+        unsigned byte_val = 0;
+        ss >> std::hex >> byte_val;
+        rc.gid.raw[i] = static_cast<uint8_t>(byte_val);
+      }
+    }
+
+    return rc;
   }
 
   // private:
   RemoteConnectionInfo rci;
+  union ibv_gid gid;
+  bool is_roce = false;
 };
 
 class ReliableConnection {

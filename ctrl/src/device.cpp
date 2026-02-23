@@ -143,14 +143,47 @@ bool ResolvedPort::bindTo(size_t index) {
     }
 
     if (skipped_active_ports == index) {
-      if (port_attr.link_layer != IBV_LINK_LAYER_INFINIBAND) {
-        throw std::runtime_error(
-            "Transport type required is InfiniBand but port link layer is " +
-            link_layer_str(port_attr.link_layer));
-      }
+      // Disabled: original code rejects non-InfiniBand ports, but we need
+      // RoCE (Ethernet) support on this cluster.
+      // if (port_attr.link_layer != IBV_LINK_LAYER_INFINIBAND) {
+      //   throw std::runtime_error(
+      //       "Transport type required is InfiniBand but port link layer is " +
+      //       link_layer_str(port_attr.link_layer));
+      // }
 
       port_id = i;
       port_lid = port_attr.lid;
+
+      is_roce = (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET);
+      if (is_roce) {
+        memset(&port_gid, 0, sizeof(port_gid));
+        gid_index = 0;
+        // Find a valid GID, prefer RoCEv2 (IPv4-mapped)
+        for (int gi = 0; gi < port_attr.gid_tbl_len && gi < 16; gi++) {
+          union ibv_gid tmp_gid;
+          if (ibv_query_gid(open_dev.context(), i, gi, &tmp_gid) == 0) {
+            // Check if GID is non-zero
+            bool nonzero = false;
+            for (int b = 0; b < 16; b++) {
+              if (tmp_gid.raw[b] != 0) { nonzero = true; break; }
+            }
+            if (nonzero) {
+              if (gid_index == 0) {
+                // First valid GID
+                port_gid = tmp_gid;
+                gid_index = gi;
+              }
+              // Prefer RoCEv2 GIDs (IPv4-mapped: starts with 0000:0000:0000:0000:0000:ffff)
+              if (tmp_gid.raw[0] == 0 && tmp_gid.raw[1] == 0 &&
+                  tmp_gid.raw[10] == 0xff && tmp_gid.raw[11] == 0xff) {
+                port_gid = tmp_gid;
+                gid_index = gi;
+                break;
+              }
+            }
+          }
+        }
+      }
 
       return true;
     }

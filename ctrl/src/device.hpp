@@ -123,6 +123,10 @@ class ResolvedPort {
 
   OpenDevice &device() { return open_dev; }
 
+  bool portIsRoCE() const { return is_roce; }
+  union ibv_gid portGID() const { return port_gid; }
+  int portGIDIndex() const { return gid_index; }
+
  private:
   static std::string link_layer_str(uint8_t link_layer) {
     switch (link_layer) {
@@ -142,5 +146,8 @@ class ResolvedPort {
   int port_index;
   uint8_t port_id;
   uint16_t port_lid;
+  bool is_roce = false;
+  union ibv_gid port_gid;
+  int gid_index = 0;
 };
 }  // namespace dory

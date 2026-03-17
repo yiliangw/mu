@@ -9,3 +9,6 @@ target_link_libraries(main-dt ${CRASH_CONSENSUS})
 
 add_executable(stats stats.cpp)
 add_executable(fifo fifo.cpp)
+
+add_executable(syntony-test syntony-test.cpp)
+target_link_libraries(syntony-test ${CRASH_CONSENSUS} ${YAML_CPP_LIB})

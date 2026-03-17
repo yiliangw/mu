@@ -71,4 +71,6 @@ else()
   message(FATAL_ERROR "crash-consensus library not found")
 endif()
 
+find_library(YAML_CPP_LIB yaml-cpp REQUIRED)
+
 add_subdirectory(src)

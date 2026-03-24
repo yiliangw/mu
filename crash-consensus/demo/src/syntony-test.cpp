@@ -77,13 +77,14 @@ static void repin_threads(
 }
 
 void benchmark(int id, std::vector<int> remote_ids, int times, int payload_size,
-               int outstanding_req,
+               int outstanding_req, int latency_buf_sz, int profiling_start,
                const std::unordered_map<std::string, int>& thread_pins);
 
 int main(int argc, char* argv[]) {
   constexpr int nr_procs = 3;
   constexpr int minimum_id = 1;
   int id = 0, payload_size = 64, outstanding_req = 8;
+  int latency_buf_sz = 0, profiling_start = 0;
 
   bool pin_threads = true;
   int handover_core    = 0;
@@ -107,6 +108,8 @@ int main(int argc, char* argv[]) {
       if (cfg["node_id"])         id              = cfg["node_id"].as<int>();
       if (cfg["payload_size"])    payload_size    = cfg["payload_size"].as<int>();
       if (cfg["outstanding_req"]) outstanding_req = cfg["outstanding_req"].as<int>();
+      if (cfg["latency_buf_sz"]) latency_buf_sz = cfg["latency_buf_sz"].as<int>();
+      if (cfg["profiling_start"]) profiling_start = cfg["profiling_start"].as<int>();
       if (cfg["pin_threads"])      pin_threads      = cfg["pin_threads"].as<bool>();
       if (cfg["handover_core"])    handover_core    = cfg["handover_core"].as<int>();
       if (cfg["consensus_core"])   consensus_core   = cfg["consensus_core"].as<int>();
@@ -165,7 +168,8 @@ int main(int argc, char* argv[]) {
 
   const int times =
       static_cast<int>(1.5 * 1024) * 1024 * 1024 / (payload_size + 64);
-  benchmark(id, remote_ids, times, payload_size, outstanding_req, thread_pins);
+  benchmark(id, remote_ids, times, payload_size, outstanding_req, latency_buf_sz,
+           profiling_start, thread_pins);
 
   while (true) {
     std::this_thread::sleep_for(std::chrono::seconds(60));
@@ -175,7 +179,7 @@ int main(int argc, char* argv[]) {
 }
 
 void benchmark(int id, std::vector<int> remote_ids, int times, int payload_size,
-               int outstanding_req,
+               int outstanding_req, int latency_buf_sz, int profiling_start,
                const std::unordered_map<std::string, int>& thread_pins) {
   dory::Consensus consensus(id, remote_ids, outstanding_req, dory::ThreadBank::A);
   consensus.commitHandler([]([[maybe_unused]] bool leader,
@@ -200,7 +204,6 @@ void benchmark(int id, std::vector<int> remote_ids, int times, int payload_size,
     uint8_t* payload = &payload_buffer[0];
 
     std::vector<TIMESTAMP_T> timestamps_start(times);
-    std::vector<TIMESTAMP_T> timestamps_end(times);
     std::vector<std::pair<int, TIMESTAMP_T>> timestamps_ranges(times);
     TIMESTAMP_T loop_time;
 
@@ -219,8 +222,11 @@ void benchmark(int id, std::vector<int> remote_ids, int times, int payload_size,
 
     TIMESTAMP_T start_meas, end_meas;
 
+    bool profiling_started = (profiling_start == 0);
     GET_TIMESTAMP(start_meas);
     for (int i = 0; i < times; i++) {
+      GET_TIMESTAMP(timestamps_start[i]);
+
       dory::ProposeError err;
       if ((err = consensus.propose(&(payloads[i % 8192][0]), payload_size)) !=
           dory::ProposeError::NoError) {
@@ -255,11 +261,56 @@ void benchmark(int id, std::vector<int> remote_ids, int times, int payload_size,
                       << std::endl;
         }
       }
+
+      // Poll replication progress (same as main-st-lat.cpp)
+      GET_TIMESTAMP(loop_time);
+      auto [id_posted, id_replicated] = consensus.proposedReplicatedRange();
+      (void)id_posted;
+      timestamps_ranges[i] =
+          std::make_pair(static_cast<int>(id_replicated - offset), loop_time);
+
+      if (!profiling_started && i >= profiling_start) {
+        profiling_started = true;
+        GET_TIMESTAMP(start_meas);
+      }
     }
     GET_TIMESTAMP(end_meas);
-    std::cout << "Replicated " << times << " commands of size " << payload_size
-              << " bytes in " << ELAPSED_NSEC(start_meas, end_meas) << " ns"
-              << std::endl;
+    int profiled_count = times - profiling_start;
+    std::cout << "Replicated " << profiled_count << " commands of size "
+              << payload_size << " bytes in "
+              << ELAPSED_NSEC(start_meas, end_meas) << " ns" << std::endl;
+
+    // Post-process: match proposals to replication timestamps,
+    // skipping the first profiling_start proposals as warmup.
+    const int lat_cap = latency_buf_sz > 0 ? latency_buf_sz : 0;
+    int start_range = 0;
+    int lat_cnt = 0;
+
+    if (lat_cap > 0) {
+      std::cout << "Latency samples:";
+      __uint128_t lat_sum = 0;
+      for (int i = 0; i < times && lat_cnt < lat_cap; i++) {
+        auto [last_id, timestamp] = timestamps_ranges[i];
+        for (int j = start_range; j < last_id && lat_cnt < lat_cap; j++) {
+          if (j >= profiling_start) {
+            uint64_t lat = ELAPSED_NSEC(timestamps_start[j], timestamp);
+            std::cout << " " << lat;
+            lat_sum += lat;
+            lat_cnt++;
+          }
+        }
+        if (start_range < last_id) {
+          start_range = last_id;
+        }
+      }
+      std::cout << std::endl;
+
+      if (lat_cnt > 0) {
+        uint64_t lat_avg = static_cast<uint64_t>(lat_sum / lat_cnt);
+        std::cout << "Average latency: " << lat_avg << " ns (" << lat_cnt
+                  << " samples)" << std::endl;
+      }
+    }
 
     exit(0);
   }

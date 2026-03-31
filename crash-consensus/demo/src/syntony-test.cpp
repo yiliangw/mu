@@ -84,9 +84,9 @@ void benchmark(int id, std::vector<int> remote_ids, int times, int payload_size,
                const std::unordered_map<std::string, int>& thread_pins);
 
 int main(int argc, char* argv[]) {
-  constexpr int nr_procs = 3;
+  int nr_procs = 0;
   constexpr int minimum_id = 1;
-  int id = 0, payload_size = 64;
+  int id = 0, payload_size = 64, num_proposals = 0;
   int internal_outstanding = 8;
   int latency_buf_sz = 0, profiling_start = 0;
 
@@ -111,7 +111,9 @@ int main(int argc, char* argv[]) {
       YAML::Node cfg = YAML::LoadFile(path);
       if (cfg["node_id"])         id              = cfg["node_id"].as<int>();
       if (cfg["payload_size"])    payload_size    = cfg["payload_size"].as<int>();
+      if (cfg["nr_procs"]) nr_procs = cfg["nr_procs"].as<int>();
       if (cfg["internal_outstanding"]) internal_outstanding = cfg["internal_outstanding"].as<int>();
+      if (cfg["num_proposals"]) num_proposals = cfg["num_proposals"].as<int>();
       if (cfg["latency_buf_sz"]) latency_buf_sz = cfg["latency_buf_sz"].as<int>();
       if (cfg["profiling_start"]) profiling_start = cfg["profiling_start"].as<int>();
       if (cfg["pin_threads"])      pin_threads      = cfg["pin_threads"].as<bool>();
@@ -137,7 +139,10 @@ int main(int argc, char* argv[]) {
     internal_outstanding = atoi(argv[3]);
   }
 
-  constexpr int maximum_id = minimum_id + nr_procs - 1;
+  if (nr_procs <= 0) {
+    throw std::runtime_error("nr_procs not set in config");
+  }
+  const int maximum_id = minimum_id + nr_procs - 1;
   if (id < minimum_id || id > maximum_id) {
     throw std::runtime_error("Invalid id: must be between " +
                              std::to_string(minimum_id) + " and " +
@@ -170,7 +175,7 @@ int main(int argc, char* argv[]) {
     if (min_id != id) remote_ids.push_back(min_id);
   }
 
-  const int times =
+  const int times = num_proposals > 0 ? num_proposals :
       static_cast<int>(1.5 * 1024) * 1024 * 1024 / (payload_size + 64);
   benchmark(id, remote_ids, times, payload_size, internal_outstanding,
            latency_buf_sz, profiling_start, thread_pins);

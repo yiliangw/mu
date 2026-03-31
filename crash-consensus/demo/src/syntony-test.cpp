@@ -8,7 +8,9 @@
 //   syntony-test <node_id> <payload_size> <outstanding_req>  (legacy)
 
 #include <chrono>
+#include <cstring>
 #include <dirent.h>
+#include <queue>
 #include <fstream>
 #include <iostream>
 #include <sched.h>
@@ -77,13 +79,15 @@ static void repin_threads(
 }
 
 void benchmark(int id, std::vector<int> remote_ids, int times, int payload_size,
-               int outstanding_req, int latency_buf_sz, int profiling_start,
+               int internal_outstanding,
+               int latency_buf_sz, int profiling_start,
                const std::unordered_map<std::string, int>& thread_pins);
 
 int main(int argc, char* argv[]) {
   constexpr int nr_procs = 3;
   constexpr int minimum_id = 1;
-  int id = 0, payload_size = 64, outstanding_req = 8;
+  int id = 0, payload_size = 64;
+  int internal_outstanding = 8;
   int latency_buf_sz = 0, profiling_start = 0;
 
   bool pin_threads = true;
@@ -107,7 +111,7 @@ int main(int argc, char* argv[]) {
       YAML::Node cfg = YAML::LoadFile(path);
       if (cfg["node_id"])         id              = cfg["node_id"].as<int>();
       if (cfg["payload_size"])    payload_size    = cfg["payload_size"].as<int>();
-      if (cfg["outstanding_req"]) outstanding_req = cfg["outstanding_req"].as<int>();
+      if (cfg["internal_outstanding"]) internal_outstanding = cfg["internal_outstanding"].as<int>();
       if (cfg["latency_buf_sz"]) latency_buf_sz = cfg["latency_buf_sz"].as<int>();
       if (cfg["profiling_start"]) profiling_start = cfg["profiling_start"].as<int>();
       if (cfg["pin_threads"])      pin_threads      = cfg["pin_threads"].as<bool>();
@@ -130,7 +134,7 @@ int main(int argc, char* argv[]) {
     }
     id              = atoi(argv[1]);
     payload_size    = atoi(argv[2]);
-    outstanding_req = atoi(argv[3]);
+    internal_outstanding = atoi(argv[3]);
   }
 
   constexpr int maximum_id = minimum_id + nr_procs - 1;
@@ -141,7 +145,7 @@ int main(int argc, char* argv[]) {
   }
 
   std::cout << "USING PAYLOAD SIZE = " << payload_size << std::endl;
-  std::cout << "USING OUTSTANDING_REQ = " << outstanding_req << std::endl;
+  std::cout << "USING INTERNAL_OUTSTANDING = " << internal_outstanding << std::endl;
 
   std::unordered_map<std::string, int> thread_pins;
   if (pin_threads) {
@@ -168,8 +172,8 @@ int main(int argc, char* argv[]) {
 
   const int times =
       static_cast<int>(1.5 * 1024) * 1024 * 1024 / (payload_size + 64);
-  benchmark(id, remote_ids, times, payload_size, outstanding_req, latency_buf_sz,
-           profiling_start, thread_pins);
+  benchmark(id, remote_ids, times, payload_size, internal_outstanding,
+           latency_buf_sz, profiling_start, thread_pins);
 
   while (true) {
     std::this_thread::sleep_for(std::chrono::seconds(60));
@@ -179,9 +183,11 @@ int main(int argc, char* argv[]) {
 }
 
 void benchmark(int id, std::vector<int> remote_ids, int times, int payload_size,
-               int outstanding_req, int latency_buf_sz, int profiling_start,
+               int internal_outstanding,
+               int latency_buf_sz, int profiling_start,
                const std::unordered_map<std::string, int>& thread_pins) {
-  dory::Consensus consensus(id, remote_ids, outstanding_req, dory::ThreadBank::A);
+  dory::Consensus consensus(id, remote_ids, internal_outstanding,
+                            dory::ThreadBank::A);
   consensus.commitHandler([]([[maybe_unused]] bool leader,
                              [[maybe_unused]] uint8_t* buf,
                              [[maybe_unused]] size_t len) {});
@@ -203,6 +209,7 @@ void benchmark(int id, std::vector<int> remote_ids, int times, int payload_size,
     std::vector<uint8_t> payload_buffer(payload_size + 2);
     uint8_t* payload = &payload_buffer[0];
 
+    // Per-proposal start timestamp, indexed by committed order
     std::vector<TIMESTAMP_T> timestamps_start(times);
     std::vector<std::pair<int, TIMESTAMP_T>> timestamps_ranges(times);
     TIMESTAMP_T loop_time;
@@ -220,60 +227,82 @@ void benchmark(int id, std::vector<int> remote_ids, int times, int payload_size,
 
     std::cout << "Started" << std::endl;
 
-    TIMESTAMP_T start_meas, end_meas;
+    // Pending proposal in the client FIFO
+    struct PendingProposal {
+      int payload_idx;
+      TIMESTAMP_T start_ts;
+    };
+    std::queue<PendingProposal> pending;
 
+    // Track committed count via proposedReplicatedRange
+    int committed = 0;
+    int submitted = 0;  // successfully submitted to Mu (in-flight in Mu)
+
+    TIMESTAMP_T start_meas, end_meas;
     bool profiling_started = (profiling_start == 0);
     GET_TIMESTAMP(start_meas);
+
+    // Main loop: same as main-st-lat.cpp but with retry FIFO.
+    // propose() is called every iteration to keep Mu's CQ processing alive.
     for (int i = 0; i < times; i++) {
-      GET_TIMESTAMP(timestamps_start[i]);
+      // Pick what to propose: retry from FIFO first, or new proposal
+      int prop_idx;
+      bool is_retry;
+      if (!pending.empty()) {
+        prop_idx = pending.front().payload_idx;
+        is_retry = true;
+      } else {
+        prop_idx = i;
+        is_retry = false;
+        GET_TIMESTAMP(timestamps_start[i]);
+      }
 
       dory::ProposeError err;
-      if ((err = consensus.propose(&(payloads[i % 8192][0]), payload_size)) !=
+      if ((err = consensus.propose(&(payloads[prop_idx % 8192][0]),
+                                   payload_size)) !=
           dory::ProposeError::NoError) {
-        i -= 1;
-        switch (err) {
-          case dory::ProposeError::FastPath:
-          case dory::ProposeError::FastPathRecyclingTriggered:
-          case dory::ProposeError::SlowPathCatchFUO:
-          case dory::ProposeError::SlowPathUpdateFollowers:
-          case dory::ProposeError::SlowPathCatchProposal:
-          case dory::ProposeError::SlowPathUpdateProposal:
-          case dory::ProposeError::SlowPathReadRemoteLogs:
-          case dory::ProposeError::SlowPathWriteAdoptedValue:
-          case dory::ProposeError::SlowPathWriteNewValue:
-            std::cout << "Error: in leader mode. Code: "
-                      << static_cast<int>(err) << std::endl;
-            break;
-
-          case dory::ProposeError::SlowPathLogRecycled:
-            std::cout << "Log recycled, waiting a bit..." << std::endl;
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            break;
-
-          case dory::ProposeError::MutexUnavailable:
-          case dory::ProposeError::FollowerMode:
-            std::cout << "Error: in follower mode. Potential leader: "
-                      << consensus.potentialLeader() << std::endl;
-            break;
-
-          default:
-            std::cout << "Bug in code. You should only handle errors here"
-                      << std::endl;
+        // Failed — if this was a new proposal, queue it for retry
+        if (!is_retry) {
+          PendingProposal pp;
+          pp.payload_idx = prop_idx;
+          pp.start_ts = timestamps_start[i];
+          pending.push(pp);
         }
+        i -= 1;  // retry on next iteration (triggers CQ processing)
+      } else {
+        // Success
+        if (is_retry) {
+          // Record the original timestamp for this retried proposal
+          timestamps_start[submitted] = pending.front().start_ts;
+          pending.pop();
+        } else {
+          // timestamps_start[i] already set above
+          // but submitted may differ from i if retries reordered things
+          if (submitted != i) {
+            timestamps_start[submitted] = timestamps_start[i];
+          }
+        }
+        submitted++;
       }
 
       // Poll replication progress (same as main-st-lat.cpp)
       GET_TIMESTAMP(loop_time);
       auto [id_posted, id_replicated] = consensus.proposedReplicatedRange();
       (void)id_posted;
-      timestamps_ranges[i] =
-          std::make_pair(static_cast<int>(id_replicated - offset), loop_time);
+      int now_committed = static_cast<int>(id_replicated - offset);
+      if (submitted > 0) {
+        timestamps_ranges[submitted - 1] =
+            std::make_pair(now_committed, loop_time);
+      }
+      committed = now_committed;
 
       if (!profiling_started && i >= profiling_start) {
         profiling_started = true;
         GET_TIMESTAMP(start_meas);
       }
     }
+
+    // Main loop already handles draining
     GET_TIMESTAMP(end_meas);
     int profiled_count = times - profiling_start;
     std::cout << "Replicated " << profiled_count << " commands of size "
